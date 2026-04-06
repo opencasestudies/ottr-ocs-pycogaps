@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
-# Copy this file to _environment for macOS/Linux:
-#   cp _environment.macos_linux _environment
 
-# Force Quarto + reticulate to use the project venv
-export QUARTO_PYTHON="./.venv/bin/python"
-export RETICULATE_PYTHON="./.venv/bin/python"
+# Resolve the project root from this file's own location so the environment
+# works even when sourced outside the repo root.
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  _cogaps_env_file="${BASH_SOURCE[0]}"
+else
+  _cogaps_env_file="$0"
+fi
+
+export COGAPS_PROJECT_ROOT="$(cd "$(dirname "${_cogaps_env_file}")" && pwd)"
+export VIRTUAL_ENV="${COGAPS_PROJECT_ROOT}/.venv"
+
+case ":${PATH}:" in
+  *":${VIRTUAL_ENV}/bin:"*) ;;
+  *) export PATH="${VIRTUAL_ENV}/bin:${PATH}" ;;
+esac
+
+# Force Quarto + reticulate to use the project venv.
+export QUARTO_PYTHON="${VIRTUAL_ENV}/bin/python"
+export RETICULATE_PYTHON="${VIRTUAL_ENV}/bin/python"
 
 # Thread limits (keep containers predictable)
 export OMP_NUM_THREADS="4"

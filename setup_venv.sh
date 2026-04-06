@@ -78,13 +78,43 @@ echo "==> Installing base notebook requirements"
 ensure_env_exports () {
   local file="${1}"
 
+  ensure_export_line () {
+    local target_file="${1}"
+    local key="${2}"
+    local value="${3}"
+
+    if grep -qE "^\s*export\s+${key}=" "${target_file}"; then
+      sed -i.bak -E "s|^\s*export\s+${key}=.*$|export ${key}=\"${value}\"|" "${target_file}"
+      rm -f "${target_file}.bak"
+    else
+      echo "export ${key}=\"${value}\"" >> "${target_file}"
+    fi
+  }
+
   # Create if missing
   if [ ! -f "${file}" ]; then
     cat > "${file}" <<'EOF'
 #!/usr/bin/env bash
-# Project environment variables for Quarto/RStudio
-export QUARTO_PYTHON="./.venv/bin/python"
-export RETICULATE_PYTHON="./.venv/bin/python"
+
+# Resolve the project root from this file's own location so the environment
+# works even when sourced outside the repo root.
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  _cogaps_env_file="${BASH_SOURCE[0]}"
+else
+  _cogaps_env_file="$0"
+fi
+
+export COGAPS_PROJECT_ROOT="$(cd "$(dirname "${_cogaps_env_file}")" && pwd)"
+export VIRTUAL_ENV="${COGAPS_PROJECT_ROOT}/.venv"
+
+case ":${PATH}:" in
+  *":${VIRTUAL_ENV}/bin:"*) ;;
+  *) export PATH="${VIRTUAL_ENV}/bin:${PATH}" ;;
+esac
+
+# Force Quarto + reticulate to use the project venv.
+export QUARTO_PYTHON="${VIRTUAL_ENV}/bin/python"
+export RETICULATE_PYTHON="${VIRTUAL_ENV}/bin/python"
 
 # Thread limits (keeps containers predictable)
 export OMP_NUM_THREADS="4"
@@ -96,13 +126,40 @@ EOF
     return
   fi
 
-  # Add missing exports (idempotent)
-  if ! grep -qE '^\s*export\s+QUARTO_PYTHON=' "${file}"; then
-    echo 'export QUARTO_PYTHON="./.venv/bin/python"' >> "${file}"
+  # Add the project-root bootstrap if it is missing.
+  if ! grep -qE '^\s*export\s+COGAPS_PROJECT_ROOT=' "${file}"; then
+    cat >> "${file}" <<'EOF'
+
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  _cogaps_env_file="${BASH_SOURCE[0]}"
+else
+  _cogaps_env_file="$0"
+fi
+
+export COGAPS_PROJECT_ROOT="$(cd "$(dirname "${_cogaps_env_file}")" && pwd)"
+export VIRTUAL_ENV="${COGAPS_PROJECT_ROOT}/.venv"
+
+case ":${PATH}:" in
+  *":${VIRTUAL_ENV}/bin:"*) ;;
+  *) export PATH="${VIRTUAL_ENV}/bin:${PATH}" ;;
+esac
+EOF
   fi
-  if ! grep -qE '^\s*export\s+RETICULATE_PYTHON=' "${file}"; then
-    echo 'export RETICULATE_PYTHON="./.venv/bin/python"' >> "${file}"
+
+  if ! grep -qE '^\s*export\s+VIRTUAL_ENV=' "${file}"; then
+    echo 'export VIRTUAL_ENV="${COGAPS_PROJECT_ROOT}/.venv"' >> "${file}"
   fi
+  if ! grep -q '\${VIRTUAL_ENV}/bin:\${PATH}' "${file}"; then
+    cat >> "${file}" <<'EOF'
+case ":${PATH}:" in
+  *":${VIRTUAL_ENV}/bin:"*) ;;
+  *) export PATH="${VIRTUAL_ENV}/bin:${PATH}" ;;
+esac
+EOF
+  fi
+
+  ensure_export_line "${file}" "QUARTO_PYTHON" '${VIRTUAL_ENV}/bin/python'
+  ensure_export_line "${file}" "RETICULATE_PYTHON" '${VIRTUAL_ENV}/bin/python'
 }
 
 echo "==> Ensuring ${ENV_FILE} exports QUARTO_PYTHON/RETICULATE_PYTHON"
@@ -309,8 +366,11 @@ echo "   Wrote: ${SITE_PACKAGES}/pycogaps_vendor.pth -> ${PROJECT_ROOT}/${PYCOGA
 echo "==> Verifying imports"
 "${VENV_PY}" -c "import pycogaps; from PyCoGAPS.parameters import CoParams; print('✅ pycogaps + PyCoGAPS imports OK')"
 
-echo "==> Registering Jupyter kernel for Quarto"
-"${VENV_PY}" -m ipykernel install --user --name "${KERNEL_NAME}" --display-name "${KERNEL_DISPLAY}"
+echo "==> Registering Jupyter kernel for Quarto (project-local)"
+"${VENV_PY}" -m ipykernel install \
+  --prefix "${PROJECT_ROOT}/${VENV_DIR}" \
+  --name "${KERNEL_NAME}" \
+  --display-name "${KERNEL_DISPLAY}"
 
 echo ""
 echo "✅ Setup complete."
